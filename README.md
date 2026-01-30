@@ -78,12 +78,12 @@ run_mh_sampler <- function(N_iter, X, y, prop_cov) {
 ### A. Convergence Diagnostics
 The MCMC chain exhibits excellent mixing. The "fuzzy caterpillar" trace plots indicate that the sampler has converged to the stationary distribution.
 
-![Trace Plots](Report/images/trace_plots.pdf)
+![Trace Plots](Report/images/trace_plots.png)
 
 ### B. Bayesian vs. Frequentist Comparison
 We compared our posterior means against the standard MLE estimates. The alignment is nearly perfect, validating the correctness of our sampler.
 
-![Posterior Density](Report/images/posterior_density.pdf)
+![Posterior Density](Report/images/posterior_density.png)
 
 **Statistical Comparison:**
 
