@@ -4,12 +4,9 @@
 # Author : Harsh Rana (229989) & Raj Pawar (231811)
 # ==============================================================================
 
-# 1. SETUP AND LIBRARIES
+# SETUP AND LIBRARIES
 if(!require(pacman)) install.packages("pacman")
 pacman::p_load(tidyverse, MASS, coda, caret, mvtnorm, knitr)
-
-# Set working directory to source file location (if using RStudio)
-# setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
 data_path <- here::here("Data", "diabetes.csv")
 img_path  <- here::here("Report", "images")
@@ -17,7 +14,7 @@ img_path  <- here::here("Report", "images")
 # Create image directory if it doesn't exist
 if(!dir.exists(img_path)) dir.create(img_path, recursive = TRUE)
 
-# 2. DATA LOADING & PREPROCESSING 
+# DATA LOADING & PREPROCESSING 
 cat("Loading Data...\n")
 data <- read_csv(data_path, show_col_types = FALSE)
 
@@ -38,15 +35,15 @@ y_train <- dataTrain$Outcome
 X_test  <- as.matrix(cbind(1, dataTest[, -9]))
 y_test  <- dataTest$Outcome
 
-# 3. FREQUENTIST MODEL (The "Control" Group)
+# FREQUENTIST MODEL (The "Control" Group)
 # We run this to compare our Bayesian results against standard MLE.
 cat("Running Frequentist GLM...\n")
 freq_model <- glm(Outcome ~ ., data = dataTrain, family = binomial)
 freq_est   <- coef(freq_model)
 freq_ci    <- confint(freq_model) # Standard 95% Confidence Intervals
 
-# 4. BAYESIAN MODEL (The "Experimental" Group) 
-# A. Log-Posterior Function
+# BAYESIAN MODEL (The "Experimental" Group) 
+# Log-Posterior Function
 log_posterior <- function(beta, X, y) {
   # Prior: Beta ~ N(0, 100*I) -> Weakly informative
   sigma_prior_sq <- 100 
@@ -66,14 +63,19 @@ log_posterior <- function(beta, X, y) {
   return(as.numeric(log_lik + log_prior))
 }
 
-# B. Metropolis-Hastings Sampler
-run_mh_sampler <- function(N_iter, X, y, prop_cov) {
+# Metropolis-Hastings Sampler
+run_mh_sampler <- function(N_iter, X, y, prop_cov, init_state = NULL) {
   p <- ncol(X)
   samples <- matrix(NA, nrow = N_iter, ncol = p)
   colnames(samples) <- colnames(X)
   
   # Initial State
-  beta_curr <- rep(0, p)
+  if (is.null(init_state)) {
+    beta_curr <- rep(0, p)
+  } else {
+    beta_curr <- init_state
+  }
+  
   log_post_curr <- log_posterior(beta_curr, X, y)
   accept_count <- 0
   
@@ -98,51 +100,90 @@ run_mh_sampler <- function(N_iter, X, y, prop_cov) {
   return(list(samples = samples, accept_rate = accept_count / N_iter))
 }
 
-# C. Run Simulation
+# Run Simulation (Multiple Chains for Diagnostics)
 N_iter <- 50000
 burn_in <- 10000
 step_size <- 0.003 # Tuned for ~30-50% acceptance
 prop_cov <- diag(ncol(X_train)) * step_size
+n_chains <- 3
 
-cat("Running MCMC Chain (This may take 10-20 seconds)...\n")
+cat(sprintf("Running %d MCMC Chains...\n", n_chains))
 set.seed(2025)
-results <- run_mh_sampler(N_iter, X_train, y_train, prop_cov)
 
-cat("Final Acceptance Rate:", results$accept_rate, "\n")
-# Ideally, we want this between 0.23 and 0.50
+# Initialize a list to hold the coda mcmc objects
+chain_list <- list()
 
-# Remove Burn-in
-mcmc_samples <- results$samples[(burn_in + 1):N_iter, ]
-mcmc_obj <- mcmc(mcmc_samples)
+for (c in 1:n_chains) {
+  cat("  Running Chain", c, "...\n")
+  # Start each chain at a randomly jittered dispersed location
+  initial_beta <- rnorm(ncol(X_train), mean = 0, sd = 2) 
+  
+  results <- run_mh_sampler(N_iter, X_train, y_train, prop_cov, init_state = initial_beta)
+  
+  # Remove burn-in and convert to an mcmc object for coda
+  mcmc_samples <- results$samples[(burn_in + 1):N_iter, ]
+  chain_list[[c]] <- mcmc(mcmc_samples)
+}
 
-# 5. GENERATE & SAVE RESULTS
+# Create an mcmc.list required by coda for multi-chain diagnostics
+mcmc_chains <- mcmc.list(chain_list)
 
-# A. Trace Plots (Evidence of Convergence)
-pdf(file.path(img_path, "trace_plots.pdf"), width = 10, height = 8)
-par(mfrow=c(3,3)) 
+cat("\n--- CONVERGENCE DIAGNOSTICS ---\n")
+
+# Gelman-Rubin Diagnostic (R-hat)
+gelman_result <- gelman.diag(mcmc_chains)
+print(gelman_result)
+
+# Effective Sample Size (ESS)
+ess_result <- effectiveSize(mcmc_chains)
+cat("\nEffective Sample Size:\n")
+print(ess_result)
+
+# Combine all post-burn-in samples from all chains for final plotting and tables
+combined_samples <- do.call(rbind, chain_list)
+mcmc_samples <- combined_samples # Overwrite so existing plot code works
+
+# PLOTTING & EXPORTING
+cat("Generating Academic-Grade Plots with Large Fonts...\n")
+
+clean_names <- c("Intercept", "Pregnancies", "Glucose", "Blood Pressure", 
+                 "Skin Thickness", "Insulin", "BMI", "Pedigree Func.", "Age")
+
+# Trace Plots
+pdf(file.path(img_path, "trace_plots.pdf"), width = 12, height = 10)
+par(mfrow=c(3,3), mar=c(6, 6, 5, 2) + 0.1) 
 for(i in 1:ncol(X_train)) {
-  plot(mcmc_samples[,i], type='l', main=colnames(X_train)[i], 
-       ylab="Coefficient Value", xlab="Iteration", col="darkgrey")
-  lines(lowess(mcmc_samples[,i]), col="blue", lwd=2)
+  plot(mcmc_samples[,i], type="l", main=clean_names[i], 
+       ylab="Coefficient Value", xlab="Iteration", col="gray", 
+       cex.main=2.0, cex.lab=1.8, cex.axis=1.5)
+  
+  lines(lowess(mcmc_samples[,i]), col="blue", lwd=3)
 }
 dev.off()
 
-# B. Density Comparison (Bayes vs Frequentist)
-pdf(file.path(img_path, "posterior_density.pdf"), width = 10, height = 8)
-par(mfrow=c(3,3))
+# Posterior Density Plots vs Frequentist
+pdf(file.path(img_path, "posterior_density.pdf"), width = 12, height = 10)
+par(mfrow=c(3,3), mar=c(6, 6, 5, 2) + 0.1)
 for(i in 1:ncol(X_train)) {
   d <- density(mcmc_samples[,i])
-  plot(d, main=colnames(X_train)[i], col="blue", lwd=2, 
-       xlab="Beta Value", ylim=c(0, max(d$y)*1.2))
-  # Add Frequentist MLE (Red dashed line)
+  
+  plot(d, main=clean_names[i], col="blue", lwd=3, 
+       xlab="Beta Value", ylab="Density", ylim=c(0, max(d$y)*1.5),
+       cex.main=2.0,   
+       cex.lab=1.8,    
+       cex.axis=1.5)   
+  
   abline(v = freq_est[i], col="red", lwd=2, lty=2)
-  # Add Legend only on first plot
-  if(i==1) legend("topright", legend=c("Bayesian Posterior", "Freq. MLE"), 
-                  col=c("blue", "red"), lty=1:2, cex=0.7)
+  
+  if(i==1) {
+    legend("topright", legend=c("Bayesian Posterior", "Freq. MLE"), 
+           col=c("blue", "red"), lty=c(1,2), lwd=c(3,2), cex=1.3, bty="n")
+  }
 }
 dev.off()
 
-# C. Comparison Table
+
+# Comparison Table
 bayes_mean <- colMeans(mcmc_samples)
 bayes_ci <- apply(mcmc_samples, 2, quantile, probs = c(0.025, 0.975))
 
@@ -158,7 +199,7 @@ comp_table <- data.frame(
 
 write_csv(comp_table, file.path(img_path, "comparison_table.csv"))
 
-# D. Predictive Performance (Test Set)
+# Predictive Performance (Test Set)
 # Calculate probability for every test patient using posterior means
 test_logits <- X_test %*% bayes_mean
 test_probs <- plogis(test_logits)
@@ -167,7 +208,6 @@ pred_classes <- ifelse(test_probs > 0.5, 1, 0)
 # Confusion Matrix
 cm <- confusionMatrix(as.factor(pred_classes), as.factor(y_test))
 
-# Save Accuracy Metrics to text file
 sink(file.path(img_path, "accuracy_metrics.txt"))
 print(cm)
 sink()
