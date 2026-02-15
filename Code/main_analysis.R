@@ -1,7 +1,7 @@
 # ==============================================================================
 # PROJECT: Bayesian Inference for Logistic Regression (Diabetes)
 # FILE: main_analysis.R
-# Author : Harsh Rana (229989)
+# Author : Harsh Rana (229989) & Raj Pawar (231811)
 # ==============================================================================
 
 # 1. SETUP AND LIBRARIES
@@ -11,9 +11,8 @@ pacman::p_load(tidyverse, MASS, coda, caret, mvtnorm, knitr)
 # Set working directory to source file location (if using RStudio)
 # setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
 
-# Define paths
-data_path <- "Data/diabetes.csv"
-img_path  <- "Report/images"
+data_path <- here::here("Data", "diabetes.csv")
+img_path  <- here::here("Report", "images")
 
 # Create image directory if it doesn't exist
 if(!dir.exists(img_path)) dir.create(img_path, recursive = TRUE)
